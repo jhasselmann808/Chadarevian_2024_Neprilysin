@@ -42,7 +42,7 @@ The analysis steps that were taken include:
   - Dataset quality control was performed on each individual sample using the process outlined in "2024_Chadarevian_NEP_Seurat_v5_10X_QC.R" or "2024_Chadarevian_NEP_Seurat_v5_Parse_QC.R" and the analysis parameters included in "Chadarevian_2024_NEP_SampleQCMetadata.xlsx"
       - 10X R script for Evans and Hasselmann datasets
       - Parse R script for Cuprizone dataset
-          - This datasets also requires "XXXXX" and "XXXXX"
+          - This datasets also requires the "Cuprizone_SampleGrouping.tsv" file
   - Sample merging and integration within each dataset using the relevant R scripts:
       - "2024_Chadarevian_NEP_Hasselmann_Seurat_v5_Integrated.R" for the Hasselmann et al. dataset
           - Will also require the "Hasselmann_TechnicalGenes.tsv" file
