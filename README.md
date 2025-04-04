@@ -37,6 +37,8 @@ In this publication, the Hasselmann et al. and Evans et al. 10X Genomics dataset
   -   ggrepel
   -   presto
   -   jsonlite
+  -   Matrix
+  -   scDblFinder
 
 The analysis steps that were taken include:
   - Dataset quality control was performed on each individual sample using the process outlined in "2024_Chadarevian_NEP_Seurat_v5_10X_QC.R" or "2024_Chadarevian_NEP_Seurat_v5_Parse_QC.R" and the analysis parameters included in "Chadarevian_2024_NEP_SampleQCMetadata.xlsx"
