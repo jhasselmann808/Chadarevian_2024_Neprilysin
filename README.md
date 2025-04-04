@@ -39,7 +39,7 @@ In this publication, the Hasselmann et al. and Evans et al. 10X Genomics dataset
   -   jsonlite
 
 The analysis steps that were taken include:
-  - Dataset quality control was performed on each individual sample using the process outlined in "2024_Chadarevian_NEP_Seurat_v5_QC.R" and the analysis parameters included in "XXXXXXXXX"
+  - Dataset quality control was performed on each individual sample using the process outlined in "2024_Chadarevian_NEP_Seurat_v5_QC.R" and the analysis parameters included in "Chadarevian_2024_NEP_SampleQCMetadata.xlsx"
   - Sample merging and integration within each dataset using the relevant R scripts:
       - "2024_Chadarevian_NEP_Hasselmann_Seurat_v5_Integrated.R" for the Hasselmann et al. dataset
           - Will also require the "Hasselmann_TechnicalGenes.tsv" file
