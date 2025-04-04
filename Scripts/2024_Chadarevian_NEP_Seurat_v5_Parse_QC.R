@@ -9,8 +9,17 @@ suppressMessages({
   library(dplyr)
   library(cowplot)
   library(ggplot2)
+  library(Matrix)
   library(jsonlite)
+  library(scDblFinder)
 })
+
+# Setting a random seed to get consistent results across analysis days
+set.seed(030989)
+# Setting the color palette for the output files. Currently has colors for up to 20 clusters
+Tcols <- c("black", "red", "darkgreen", "blue", "purple", "orange", "yellow", "lightblue", "darkred",
+          "magenta", "green", "yellow4", "wheat4", "gray48", "plum1", "chocolate1", "bisque1",
+          "cornflowerblue", "burlywood4", "lightcoral")
 # ===================================== Updated Functions =========================================
 NewFeaturePlot <- function (object, features, dims = c(1, 2), cells = NULL, pt.size = NULL, 
                             alpha = 1, order = FALSE, min.cutoff = NA, max.cutoff = NA, 
@@ -339,43 +348,6 @@ NewFeaturePlot <- function (object, features, dims = c(1, 2), cells = NULL, pt.s
   return(plots)
 }
 
-LoadAlignedData <- function(base.path=NULL, ID=NULL, metaCol=NULL, metaVal=NULL)
-{
-  
-  # Load the CellRanger data
-  CR.path <- file.path(base.path, "Cell_Ranger", ID)
-  CR.data <- Read10X(paste0(CR.path, "/outs/filtered_feature_bc_matrix/"))
-  
-  # If samples were aligned to a mixed genome, this will isolate the human gene names
-  Hu <- grep("GRCh", rownames(CR.data), value=T)
-  # If a combination of species genes were detected, subset to only retain human genes
-  if (length(Hu) > 0){
-    CR.data <- CR.data[which(rownames(CR.data) %in% Hu), ]
-    CR.genes <- as.matrix(rownames(CR.data))
-    rownames(CR.data) <- sapply(strsplit(CR.genes, split='_'), '[', 2)
-  }
-  
-  # Create a Seurat object with the human gene data
-  obj <- CreateSeuratObject(CR.data,
-                            min.cells = 3,
-                            min.features = 0,
-                            project = ID)
-  
-  # Add the sample ID to the beginning of the cell barcodes
-  obj <- RenameCells(obj, add.cell.id = gsub("_","", ID))
-  
-  # If values for both metadata column names (metaCol) and metadata values (metaVal)
-  # exits and are the same length, metadata will be added to the Seurat object
-  if (!(is.null(metaCol)) && !(is.null(metaVal)) && (length(metaCol) == length(metaVal))) {
-    for (i in 1:length(metaCol)) {
-      obj[[metaCol[[i]]]] <- factor(metaVal[[i]])
-    }
-  }
-  
-  return(obj)
-  
-}
-
 CreateQCDirectories <- function(base.path=NULL, ID=NULL)
 {
   # Create the Seurat output directory if it doesn't exists
@@ -392,41 +364,79 @@ CreateQCDirectories <- function(base.path=NULL, ID=NULL)
   dir.create(file.path(con.path, ID, "Barcodes", "Cluster_Barcodes"), recursive = T, showWarnings = F)
 }
 
-
-# =================================================================================================
-# Setting a random seed to get consistent results across analysis days
-set.seed(030989)
-# Setting the color palette for the output files. Currently has colors for up to 20 clusters
-cols <- c("black", "red", "darkgreen", "blue", "purple", "orange", "yellow", "lightblue", "darkred", 
-          "magenta", "green", "yellow4", "wheat4", "gray48", "plum1", "chocolate1", "bisque1", 
-          "cornflowerblue", "burlywood4", "lightcoral")
 # ===================================== Import Data from Cell Ranger =========================================
 # User inputs the basic  the location and sample ID for the file being processed
-storageDir <- "/path/to/main/storage/directory/"
+storageDir <- "/path/to/main/storage/directory"
 study <- "2024_Chadarevian_NEP"
-Exp <- "Evans_2023" # Change to match current analysis
-
-# Current sample ID
-ID <- "Met2" # Change to match current sample
+Exp <- "Cuprizone"
+ID <- "Sublibrary1"
 
 # User can specify metadata to add to the dataset
-# Multiple columns can be added, but only a single value for each column 
+# Multiple columns can be added, but only a single value for each column
 # will be added (i.e., all cells will have the same value for each column)
-metaCol <- c("Condition") # Column name for the metadata to be added
-metaVal <- c("Metastasis") # Value to be added to the dataset
+metaCol <- c("Sublibrary") # Column name for the metadata to be added
+metaVal <- c("Sublibrary1") # Value to be added to the dataset
 
 # Generate a pointer to the base.path for the experimental input and output
+# Ensure that these align with how the data is organized on your system
 base.path <- file.path(storageDir, study, Exp)
+split.path <- file.path(base.path, paste0("SplitPipe_Output/", ID, "/all-sample/DGE_filtered"))
 
 # Setting the output file directories
 con.path <- file.path(base.path, "Seurat", "Contamination")
 pre.dir <- file.path(base.path, "Seurat", "Preliminary")
 
-# Loading the CellRanger dataset
-scRNA <- LoadAlignedData(base.path=base.path, ID = ID, metaCol = metaCol, metaVal = metaVal)
-
 # Creating the necessary output directories
 CreateQCDirectories(base.path, ID)
+
+# Loading the Parse combined dataset matrix values
+mat <- ReadParseBio(data.dir = split.path)
+
+# Check to see if empty gene names are present, add name if so.
+table(rownames(mat) == "")
+rownames(mat)[rownames(mat) == ""] <- "unknown"
+
+# Read in cell meta data
+cell_meta <- read.csv(paste0(split.path, "/cell_metadata.csv"), row.names = 1)
+
+# Add treatment and genotype information to the metadata
+sampInfo <- read.table("/path/to/Cuprizone_SampleGrouping.tsv", header = T)
+cellCodes <- rownames(cell_meta)
+cell_meta <- merge(cell_meta, sampInfo, by = "sample")
+rownames(cell_meta) <- cellCodes
+
+# Clean up the space
+rm(cellCodes, sampInfo)
+gc()
+
+# Create object
+scRNA <- CreateSeuratObject(mat,
+                            min.features = 100,
+                            min.cells = 100,
+                            names.field = 0,
+                            meta.data = cell_meta)
+# ===========================================================
+# Update the object metadata
+# ===========================================================
+
+# Add current sublibrary column
+scRNA@meta.data$Sublibrary <- ID
+
+# Reset the object identities to something generic
+scRNA@meta.data$orig.ident <- factor(paste0(ID, "_", scRNA$sample))
+Idents(scRNA) <- scRNA$Sublibrary
+
+# Collect and print the current cell, UMI, and gene details
+details <- CollectObjectDetails(scRNA, output=T)
+
+# Order the object metadata levels
+scRNA$Treatment <- factor(scRNA$Treatment, levels = c("Normal_Chow",
+                                                      "Cuprizone"))
+# Remove matrix file to save space
+rm(mat)
+
+# Clear unused memory
+gc()
 
 # ================================================================================================================
 # =========================================== Begin QC Filtering =================================================
@@ -436,13 +446,12 @@ if(TRUE){
   # Adding metadata columns for the percent of mitochondrial and ribosomal reads
   scRNA[["percent.mito"]] <- PercentageFeatureSet(object = scRNA, pattern = "^MT-")
   scRNA[["percent.ribo"]] <- PercentageFeatureSet(object = scRNA, pattern = "^RP[SL]")
-  
+
   # Visualizing the basic QC metrics for the dataset
   cowplot::plot_grid(FeatureScatter(object = scRNA, feature1 = "nCount_RNA", feature2 = "percent.mito"),
                      FeatureScatter(object = scRNA, feature1 = "nCount_RNA", feature2 = "percent.ribo"),
-                     FeatureScatter(object = scRNA, feature1 = "nCount_RNA", feature2 = "nFeature_RNA"), 
-                     nrow = 3, ncol=1)
-  
+                     FeatureScatter(object = scRNA, feature1 = "nCount_RNA", feature2 = "nFeature_RNA"), nrow = 1, ncol=3)
+
 }
 
 # ===============================================================================================================
@@ -452,58 +461,126 @@ if(TRUE){
 if(TRUE){
   # Normalizing the data using default settings
   scRNA <- NormalizeData(scRNA, normalization.method = 'LogNormalize', scale.factor = 10000)
-  
+
+  # Identifying variable features to scale on
+  scRNA <- FindVariableFeatures(scRNA, selection.method = "vst", nfeatures = 2000)
+  top10 <- head(VariableFeatures(scRNA), 10)
+  plot1 <- VariableFeaturePlot(scRNA)
+  LabelPoints(plot = plot1, points=top10, repel=T)
+
   # Scaling and centering the data using the full transcriptome
-  scRNA <- ScaleData(scRNA, features = rownames(scRNA), block.size = 10000)
-  
+  scRNA <- ScaleData(scRNA, 
+                     features = VariableFeatures(scRNA),
+                     block.size = 1000)
+
   # Performing PCA analysis on the full transcriptome
-  scRNA <- RunPCA(object = scRNA, features = rownames(scRNA), do.print = TRUE, ndims.print = 1:5, 
-                  nfeatures.print = 10)
-  
+  scRNA <- RunPCA(object = scRNA, features = VariableFeatures(scRNA), do.print = TRUE, ndims.print = 1:5,
+                  nfeatures.print = 10, npcs = 100)
+
   # Printing an elbow plot for PC selection
-  ElbowPlot(object = scRNA, ndims = 50)
+  ElbowPlot(object = scRNA, ndims = 100)
   # Save the elbow plot
   ggsave(filename= file.path(con.path, ID, paste0("ElbowPlot_", Exp, "_", ID, ".png")),
          width=8, height=5, units="in", dpi=300, bg="white")
-  
-  # Printing an elbow plot for PC selection
-  ElbowPlot(object = scRNA, ndims = 50)
-  
+
+  # Saving the Seurat object in case ScaleData crashes due to RAM limit
+  saveRDS(scRNA, file = file.path(con.path, ID, paste0(Exp, "_", ID, "_Seurat_Object.rds")))
+
 }
 
-# ===============================================================================================================    
+# Printing an elbow plot for PC selection
+ElbowPlot(object = scRNA, ndims = 100)
+
+# ===============================================================================================================
 # ========================================== Clustering the cells ===============================================
 # ===============================================================================================================
 
 # Select the number of PCs to use for the nearest neighbor analysis and the
 # resolution for the clustering. For QC clustering, 0.6-0.9 is typically sufficient
 # to distinguish the relevant clusters.
-PCs <- c(1:20) # Change according to Chadarevian_2024_NEP_SampleQCMetadata.xlsx
+PCs <- c(1:25) # Change according to Chadarevian_2024_NEP_SampleQCMetadata.xlsx
 Res <- 0.8 # Change according to Chadarevian_2024_NEP_SampleQCMetadata.xlsx
 
 # Perform clustering of data
 scRNA <- FindNeighbors(scRNA, dims = PCs, force.recalc = T)
 scRNA <- FindClusters(object = scRNA, resolution = Res)
 
-# ===================================================================================================================   
+# ===================================================================================================================
 # =========================================== Generating UMAP plots =================================================
 # ===================================================================================================================
 
 # Running UMAP with the previously calculated parameters
 scRNA <- RunUMAP(scRNA, dims = PCs)
-DimPlot(scRNA, reduction = "umap", label = T)
+DimPlot(scRNA, reduction = "umap", label = T, raster = F)
+
+# ================================= Save the barcodes for each cluster =======================================
+
+for (i in unique(eval(parse(text=paste0("scRNA$RNA_snn_res.", Res))))){
+
+  assign(paste0("Cells", i), data.frame(Cells = WhichCells(scRNA, idents=i)))
+
+  write.table(eval(parse(text=paste0("Cells", i))),
+              file.path(con.path, ID, "Barcodes", "Cluster_Barcodes", paste0(Exp, "_", ID, "_Clust", i, "_Barcodes.tsv")),
+              quote=F, sep='\t', row.names = F)
+}
+
+# Store all barcodes in the dataset for use later
+Allcodes <- colnames(scRNA)
+
+# ============================================================================================================
+# ========================================= Removing Doublets ================================================
+# ================================ Identify and save contaminating barcodes ==================================
+# ============================================================================================================
+
+# Identify and remove doublets
+sce <- as.SingleCellExperiment(scRNA)
+sce <- scDblFinder(sce, clusters = 'seurat_clusters')
+
+scRNA@meta.data$scDblFinder.score <- sce$scDblFinder.score
+scRNA@meta.data$scDblFinder.class <- sce$scDblFinder.class
+scRNA@meta.data$scDblFinder.weighted <- sce$scDblFinder.weighted
+
+DimPlot(scRNA, group.by = "scDblFinder.class")
+
+ggsave(filename= file.path(con.path, ID, "Plots", paste0("UMAP_", Exp, "_", ID, "_Doublets.png")),
+       width=7, height=5, units="in", dpi=300, bg='white')
+
+doublet <- data.frame(Cells = rownames(scRNA@meta.data[scRNA$scDblFinder.class == "doublet",]))
+
+# Write doublet cell barcodes to a file
+write.table(doublet, file.path(con.path, ID, "Barcodes", "Contaminating_Barcodes",
+                               "Doublet_Barcodes.tsv"), sep='\t', quote=F, row.names = F)
+
+if (TRUE) {
+# Make doublet object
+doubs <- subset(scRNA, cells = doublet$Cells)
+
+doubFile <- file(file.path(con.path, ID, "DoubletInformation.txt"))
+writeLines(c("Original Count by Group",
+             paste0('\t', names(table(scRNA@meta.data[[metaName]])), ": ", table(scRNA@meta.data[[metaName]])),
+             "Doublet Count by Group",
+             paste0('\t', names(table(doubs@meta.data[[metaName]])), ": ", table(doubs@meta.data[[metaName]])),
+             "Percent Doublets by Group",
+             paste0('\t', names(table(doubs@meta.data[[metaName]])), ": ", (table(doubs@meta.data[[metaName]])/table(scRNA@meta.data[[metaName]]))*100),
+             "Percent Doublets by Sample",
+             paste0('\t', names(table(doubs$sample)), ": ", (table(doubs$sample)/table(scRNA$sample))*100)), doubFile)
+close(doubFile)
+}
+
+# Remove doublets
+scRNA <- subset(scRNA, cells = doublet$Cells, invert = T)
+
 
 # ============================================================================================================
 # ======================================= Saving QC Analysis Data ============================================
 # ============================================================================================================
+# =========================================== Save UMAP plot =================================================
 
-# =========================================== Save UMAP plot ================================================= 
-
-DimPlot(object = scRNA, pt.size = 1, label = T, reduction = 'umap') + theme_classic() +
-  scale_color_manual(values = cols) +
-  theme(axis.line=element_line(linewidth=1), 
-        axis.ticks = element_line(color='black', linewidth=3), 
-        axis.ticks.length = unit(0, 'cm'), 
+DimPlot(object = scRNA, pt.size = 1, label = T, reduction = 'umap', raster = F) + theme_classic() +
+  scale_color_manual(values = Tcols) +
+  theme(axis.line=element_line(linewidth=1),
+        axis.ticks = element_line(color='black', linewidth=3),
+        axis.ticks.length = unit(0, 'cm'),
         axis.text = element_blank(),
         text = element_text(face='bold', color ='black', size=24),
         panel.border = element_blank(),
@@ -514,7 +591,26 @@ DimPlot(object = scRNA, pt.size = 1, label = T, reduction = 'umap') + theme_clas
 ggsave(filename= file.path(con.path, ID, "Plots", paste0("UMAP_", Exp, "_", ID, "_Clusters.png")),
        width=5, height=5, units="in", dpi=300, bg='white')
 
-# ==================================== Add Cluster Signature Scores ==========================================   
+
+DimPlot(object = scRNA, pt.size = 1, label = T, reduction = 'umap', raster = F, split.by = "sample") +
+  theme_classic() +
+  scale_color_manual(values = Tcols) +
+  theme(axis.line=element_line(linewidth=1),
+        axis.ticks = element_line(color='black', linewidth=3),
+        axis.ticks.length = unit(0, 'cm'),
+        axis.text = element_blank(),
+        text = element_text(face='bold', color ='black', size=24),
+        panel.border = element_blank(),
+        plot.margin = unit(c(0,1,0,0), "cm"),
+        legend.position='none') +
+  xlab("UMAP 1") + ylab("UMAP 2")
+
+ggsave(filename= file.path(con.path, ID, "Plots", paste0("UMAP_", Exp, "_", ID, "_Clusters_bySample.png")),
+       width=3*(length(unique(scRNA$sample))), height=5, units="in", dpi=300, bg='white')
+
+
+
+# ==================================== Add Cluster Signature Scores ==========================================
 
 # Load dividing gene list
 divGenes <- read.table("/path/to/QC_DividingGenes.tsv", header = T)
@@ -529,6 +625,7 @@ scRNA <- AddModuleScore(scRNA,
 # Create a list of signatures names to call in FeaturePlot
 featureList <- c("nFeature_RNA", "nCount_RNA", "percent.ribo", 
                  "percent.mito", "Dividing1")
+
 # Creating color palette for heatmap
 colfunc <- colorRampPalette(c("midnightblue", "lightskyblue1", "orange", "red"))
 # Save a layout with UMAPs for all signatures
@@ -540,120 +637,122 @@ NewFeaturePlot(scRNA, pt.size = 0.5,
 ggsave(filename= file.path(con.path, ID, "Plots", paste0("UMAP_", Exp, "_", ID, "_Signatures.png")), 
        width=14, height=8, units="in", dpi=100, bg='white')
 
-# ================================= Save the barcodes for each cluster =======================================
-
-for (i in unique(eval(parse(text=paste0("scRNA$RNA_snn_res.", Res))))){
-  
-  assign(paste0("Cells", i), data.frame(Cells = WhichCells(scRNA, idents=i)))
-  
-  write.table(eval(parse(text=paste0("Cells", i))), 
-              file.path(con.path, ID, "Barcodes", "Cluster_Barcodes", paste0(Exp, "_", ID, "_Clust", i, "_Barcodes.tsv")), 
-              quote=F, sep='\t', row.names = F)
-}
-
-# Store all barcodes in the dataset for use later
-Allcodes <- colnames(scRNA)
 
 # ======================================== Save QC Scatter plots =============================================
-cowplot::plot_grid(FeatureScatter(object = scRNA, 
-                                  feature1 = "nCount_RNA", 
-                                  feature2 = "percent.mito", 
-                                  cols = cols) + NoLegend(),
-                   FeatureScatter(object = scRNA, 
-                                  feature1 = "nCount_RNA", 
+cowplot::plot_grid(FeatureScatter(object = scRNA,
+                                  feature1 = "nCount_RNA",
+                                  feature2 = "percent.mito",
+                                  cols = Tcols,
+                                  raster = F) + NoLegend(),
+                   FeatureScatter(object = scRNA,
+                                  feature1 = "nCount_RNA",
                                   feature2 = "percent.ribo",
-                                  cols = cols) + NoLegend(),
-                   FeatureScatter(object = scRNA, 
-                                  feature1 = "nCount_RNA", 
+                                  cols = Tcols,
+                                  raster = F) + NoLegend(),
+                   FeatureScatter(object = scRNA,
+                                  feature1 = "nCount_RNA",
                                   feature2 = "nFeature_RNA",
-                                  cols = cols) + NoLegend(), nrow = 3, ncol=1)
+                                  cols = Tcols,
+                                  raster = F) + NoLegend(), nrow = 1, ncol=3)
 
-ggsave(filename = file.path(con.path, ID, "Plots", paste0("Scatter_", Exp, "_", ID, ".png")), 
+ggsave(filename = file.path(con.path, ID, "Plots", paste0("Scatter_", Exp, "_", ID, ".png")),
        width=12, height=9, units="in", dpi=300, bg='white')
 
 # ============================================================================================================
-# ==================================== Removing Contaminating Cells ==========================================
+# =============================== Removing Remaining Contaminating Cells =====================================
 # ================================ Identify and save contaminating barcodes ==================================
 # ============================================================================================================
-
 # Dividing cells cluster numbers
-div <- c(7, 9) # Include cluster numbers that are high in the dividing signature
+div <- c(14, 22, 15, 16) # Include cluster numbers that are high in the dividing signature
+
 # Damaged cells cluster numbers
-dam <- c(11, 12, 13) # Include cluster numbers that are low in genes/UMIs or high in percent.mito/percent.ribo
-# Doublet cells cluster numbers
-doub <- NULL # Include cluster numbers that are abnormally high in genes/UMIs (doublets)
+dam <- NULL # Include cluster numbers that are low in genes/UMIs or high in percent.mito/percent.ribo
 
 # Subset the Seurat object to remove the cells that didn't pass QC
-test <- subset(scRNA, cells = WhichCells(scRNA, idents = c(div, dam, doub), invert = T))
+if (length(c(div, dam)) > 0){
+  test <- subset(scRNA, cells = WhichCells(scRNA, idents = c(div, dam), invert = T))
 
-# Visualize a preview of the sample QC data after applying the above cutoffs
-cowplot::plot_grid(FeatureScatter(object = test, feature1 = "nCount_RNA", feature2 = "percent.mito", cols = cols),
-                   FeatureScatter(object = test, feature1 = "nCount_RNA", feature2 = "percent.ribo", cols = cols),
-                   FeatureScatter(object = test, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", cols = cols), 
-                   nrow =3, ncol=1)
+  # Visualize a preview of the sample QC data after applying the above cutoffs
+  cowplot::plot_grid(FeatureScatter(object = test,
+                                    feature1 = "nCount_RNA", feature2 = "percent.mito",
+                                    raster = F, cols = Tcols),
+                     FeatureScatter(object = test,
+                                    feature1 = "nCount_RNA", feature2 = "percent.ribo",
+                                    raster = F, cols = Tcols),
+                     FeatureScatter(object = test,
+                                    feature1 = "nCount_RNA", feature2 = "nFeature_RNA",
+                                    raster = F, cols = Tcols),
+                     nrow=1, ncol=3)
+
+  NewFeaturePlot(test, pt.size = 0.5, raster = F,
+                 features = featureList,
+                 cols = colfunc(20),
+                 reduction = "umap",
+                 order = T, label=T)
+} else {
+
+  print("No clusters are being removed...")
+  test <- scRNA
+
+  }
 
 if(TRUE){
   # Write dividing cell barcodes to a file
   if (is.null(div)){
     dividing <- data.frame(Cells="NULL")
-    write.table(dividing, file.path(con.path, ID, "Barcodes", "Contaminating_Barcodes", 
+    write.table(dividing, file.path(con.path, ID, "Barcodes", "Contaminating_Barcodes",
                                     "Dividing_Barcodes.tsv"), sep='\t', quote=F, row.names = F)
   } else{
     dividing <- data.frame(Cells=WhichCells(scRNA, idents = div))
-    write.table(dividing, file.path(con.path, ID, "Barcodes", "Contaminating_Barcodes", 
+    write.table(dividing, file.path(con.path, ID, "Barcodes", "Contaminating_Barcodes",
                                     "Dividing_Barcodes.tsv"), sep='\t', quote=F, row.names = F)
   }
   # Write damaged cell barcodes to a file
   if (is.null(dam)){
-    damaged <- data.frame(Cells=NULL)
+    damaged <- data.frame(Cells="NULL")
     write.table(damaged, file.path(con.path, ID, "Barcodes", "Contaminating_Barcodes",
                                    "GenePoor_Barcodes.tsv"), sep='\t', quote=F, row.names = F)
   } else {
     damaged <- data.frame(Cells=WhichCells(scRNA, idents = dam))
-    write.table(damaged, file.path(con.path, ID, "Barcodes", "Contaminating_Barcodes", 
+    write.table(damaged, file.path(con.path, ID, "Barcodes", "Contaminating_Barcodes",
                                    "GenePoor_Barcodes.tsv"), sep='\t', quote=F, row.names = F)
   }
-  # Write doublet cell barcodes to a file
-  if (is.null(doub)){
-    doublet <- data.frame(Cells="NULL")
-    write.table(doublet, file.path(con.path, ID, "Barcodes", "Contaminating_Barcodes", 
-                                   "Doublet_Barcodes.tsv"), sep='\t', quote=F, row.names = F)
-  }else{
-    doublet <- data.frame(Cells=WhichCells(scRNA, idents = doub))
-    write.table(doublet, file.path(con.path, ID, "Barcodes", "Contaminating_Barcodes", 
-                                   "Doublet_Barcodes.tsv"), sep='\t', quote=F, row.names = F)
-  }
+
+
+  # ========================= Check to see if the cutoffs look right before continuing ===========================
+  # After finalizing the cutoffs, overwrite previous Seurat object
+  scRNA <- test
+  # Remove the temporary object
+  rm(test)
+  # Subset Allcodes to remove the above barcodes
+  Allcodes <- subset(Allcodes, !(Allcodes %in% c(damaged$Cells, dividing$Cells, doublet$Cells)))
 }
 
-# ========================= Check to see if the cutoffs look right before continuing ===========================  
-# After finalizing the cutoffs, overwrite previous Seurat object
-scRNA <- test
-# Remove the temporary object
-rm(test)
-# Subset Allcodes to remove the above barcodes
-Allcodes <- subset(Allcodes, !(Allcodes %in% c(damaged$Cells, dividing$Cells, doublet$Cells)))
-
-# ============================ Additional filtering of remaining cells =======================================  
+# ============================ Additional filtering of remaining cells =======================================
 # Visualize the current sample QC data
-cowplot::plot_grid(FeatureScatter(object = scRNA, feature1 = "nCount_RNA", feature2 = "percent.mito", cols = cols),
-                   FeatureScatter(object = scRNA, feature1 = "nCount_RNA", feature2 = "percent.ribo", cols = cols),
-                   FeatureScatter(object = scRNA, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", cols = cols), 
-                   nrow = 3, ncol=1)
+cowplot::plot_grid(FeatureScatter(object = scRNA,
+                                  feature1 = "nCount_RNA", feature2 = "percent.mito", raster=F, ),
+                   FeatureScatter(object = scRNA,
+                                  feature1 = "nCount_RNA", feature2 = "percent.ribo", raster=F),
+                   FeatureScatter(object = scRNA,
+                                  feature1 = "nCount_RNA", feature2 = "nFeature_RNA", raster=F),
+                   nrow = 1, ncol=3)
 
 # Set high and low gene cutoffs
-geneLow <- 1000 # Change according to Chadarevian_2024_NEP_SampleQCMetadata.xlsx
+geneLow <- 500 # Change according to Chadarevian_2024_NEP_SampleQCMetadata.xlsx
 geneHigh <- (2*median(scRNA[["nFeature_RNA"]][[1]]))
 
 # Set high and low UMI cutoffs
-UMILow <- 1000 # Change according to Chadarevian_2024_NEP_SampleQCMetadata.xlsx
+UMILow <- 500 # Change according to Chadarevian_2024_NEP_SampleQCMetadata.xlsx
 UMIHigh <- (2*median(scRNA[["nCount_RNA"]][[1]]))
 
 # Set mitochondrial percentage cutoffs
 MitoLow <- -Inf
-MitoHigh <- 20 # Change according to Chadarevian_2024_NEP_SampleQCMetadata.xlsx
+MitoHigh <- 10 # Change according to Chadarevian_2024_NEP_SampleQCMetadata.xlsx
+
 # Set ribosomal percentage cutoffs
 RiboLow <- -Inf
-RiboHigh <- 30 # Change according to Chadarevian_2024_NEP_SampleQCMetadata.xlsx
+RiboHigh <- 1.5 # Change according to Chadarevian_2024_NEP_SampleQCMetadata.xlsx
 
 # Subset a test dataset to determine if the cutoffs are sufficient
 test <- subset(scRNA, subset = nFeature_RNA > geneLow & nFeature_RNA < geneHigh)
@@ -662,34 +761,122 @@ test <- subset(test, subset = percent.mito > MitoLow & percent.mito < MitoHigh)
 test <- subset(test, subset = percent.ribo > RiboLow & percent.ribo < RiboHigh)
 
 # Visualize a preview of the sample QC data after applying the above cutoffs
-cowplot::plot_grid(FeatureScatter(object = test, feature1 = "nCount_RNA", feature2 = "percent.mito", cols = cols),
-                   FeatureScatter(object = test, feature1 = "nCount_RNA", feature2 = "percent.ribo", cols = cols),
-                   FeatureScatter(object = test, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", cols = cols), 
-                   nrow = 3, ncol=1)
+cowplot::plot_grid(FeatureScatter(object = test,
+                                  feature1 = "nCount_RNA", feature2 = "percent.mito", raster=F),
+                   FeatureScatter(object = test,
+                                  feature1 = "nCount_RNA", feature2 = "percent.ribo", raster=F),
+                   FeatureScatter(object = test,
+                                  feature1 = "nCount_RNA", feature2 = "nFeature_RNA", raster=F),
+                   nrow = 1, ncol=3)
 
-# ========================= Check to see if the cutoffs look right before continuing ===========================  
+# ========================= Check to see if the cutoffs look right before continuing ===========================
 # After finalizing the cutoffs, overwrite previous Seurat object
 scRNA <- test
 # Remove the temporary object
 rm(test)
 # Identify and write the barcodes that were removed
 QCcodes <- data.frame(Cells = subset(Allcodes, !(Allcodes %in% colnames(scRNA))))
-write.table(QCcodes, file.path(con.path, ID, "Barcodes", "Contaminating_Barcodes", "Cutoff_Barcodes.tsv"), 
+write.table(QCcodes, file.path(con.path, ID, "Barcodes", "Contaminating_Barcodes", "Cutoff_Barcodes.tsv"),
             sep='\t', quote=F, row.names = F)
 
+# ===============================================================================================================
+# ======================================= Scaling and Normalization =============================================
+# ===============================================================================================================
 
-# ====================================== Save the Seurat Object ==============================================  
+if(TRUE){
+  # Normalizing the data using default settings
+  scRNA <- NormalizeData(scRNA, normalization.method = 'LogNormalize', scale.factor = 10000)
+
+  # Scaling and centering the data using the full transcriptome
+  scRNA <- ScaleData(scRNA, features = rownames(scRNA), block.size = 1000)
+
+  # Performing PCA analysis on the full transcriptome
+  scRNA <- RunPCA(object = scRNA, features = rownames(scRNA), do.print = TRUE, ndims.print = 1:5,
+                  nfeatures.print = 10)
+
+  # Printing an elbow plot for PC selection
+  ElbowPlot(object = scRNA, ndims = 50)
+  # Save the elbow plot
+  ggsave(filename= file.path(pre.dir, ID, paste0("ElbowPlot_", Exp, "_", ID, ".png")),
+         width=8, height=5, units="in", dpi=300, bg="white")
+
+  # Printing an elbow plot for PC selection
+  ElbowPlot(object = scRNA, ndims = 50)
+}
+
+# ===============================================================================================================
+# ========================================== Clustering the cells ===============================================
+# ===============================================================================================================
+
+# Select the number of PCs to use for the nearest neighbor analysis and the
+# resolution for the clustering. For QC clustering, 0.6-0.9 is typically sufficient
+# to distinguish the relevant clusters.
+PCs <- c(1:19) # Change according to Chadarevian_2024_NEP_SampleQCMetadata.xlsx
+Res <- 1.0 # Change according to Chadarevian_2024_NEP_SampleQCMetadata.xlsx
+
+# Perform clustering of data
+scRNA <- FindNeighbors(scRNA, dims = PCs, force.recalc = T)
+scRNA <- FindClusters(object = scRNA, resolution = Res)
+
+# ===================================================================================================================
+# =========================================== Generating UMAP plots =================================================
+# ===================================================================================================================
+
+# Running UMAP with the previously calculated parameters
+scRNA <- RunUMAP(scRNA, dims = PCs)
+DimPlot(scRNA, reduction = "umap", label = T)
+
+
+# ====================================== Save the Seurat Object ==============================================
 # Save the Seurat object with the cells that passed QC
 saveRDS(scRNA, file = file.path(pre.dir, ID, paste0(Exp, "_", ID, "_Seurat_Object.rds")))
+
+# ============================================================================================================
+# ==================================== Saving PostFilt Analysis Data =========================================
+# ============================================================================================================
+
+# =========================================== Save UMAP plot =================================================
+
+DimPlot(object = scRNA, pt.size = 1, label = T, reduction = 'umap') + theme_classic() +
+  scale_color_manual(values = Tcols) +
+  theme(axis.line=element_line(linewidth=1),
+        axis.ticks = element_line(color='black', linewidth=3),
+        axis.ticks.length = unit(0, 'cm'),
+        axis.text = element_blank(),
+        text = element_text(face='bold', color ='black', size=24),
+        panel.border = element_blank(),
+        plot.margin = unit(c(0,1,0,0), "cm"),
+        legend.position='none') +
+  xlab("UMAP 1") + ylab("UMAP 2")
+
+ggsave(filename= file.path(pre.dir, ID, "Plots", paste0("UMAP_", Exp, "_", ID, "_Clusters.png")),
+       width=5, height=5, units="in", dpi=300, bg='white')
+
+
+DimPlot(object = scRNA, pt.size = 1, label = T, reduction = 'umap', split.by = "sample") +
+  theme_classic() +
+  scale_color_manual(values = Tcols) +
+  theme(axis.line=element_line(linewidth=1),
+        axis.ticks = element_line(color='black', linewidth=3),
+        axis.ticks.length = unit(0, 'cm'),
+        axis.text = element_blank(),
+        text = element_text(face='bold', color ='black', size=24),
+        panel.border = element_blank(),
+        plot.margin = unit(c(0,1,0,0), "cm"),
+        legend.position='none') +
+  xlab("UMAP 1") + ylab("UMAP 2")
+
+ggsave(filename= file.path(pre.dir, ID, "Plots", paste0("UMAP_", Exp, "_", ID, "_Clusters_bySample.png")),
+       width=3*(length(unique(scRNA$sample))), height=5, units="in", dpi=300, bg='white')
 
 # ================================= Save the barcodes for each cluster =======================================
 
 for (i in unique(eval(parse(text=paste0("scRNA$RNA_snn_res.", Res))))){
-  
+
   assign(paste0("Cells", i), data.frame(Cells = WhichCells(scRNA, idents=i)))
-  
-  write.table(eval(parse(text=paste0("Cells", i))), 
-              file.path(pre.dir, ID, "Barcodes", paste0(Exp, "_", ID, "_Clust", i, "_Barcodes.tsv")), 
+
+  write.table(eval(parse(text=paste0("Cells", i))),
+              file.path(pre.dir, ID, "Barcodes", paste0(Exp, "_", ID, "_Clust", i, "_Barcodes.tsv")),
               quote=F, sep='\t', row.names = F)
 }
 
