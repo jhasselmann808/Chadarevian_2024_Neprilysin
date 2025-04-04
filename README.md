@@ -51,3 +51,5 @@ The analysis steps that were taken include:
       - "2024_Chadarevian_NEP_Evans_Seurat_v5_Integrated.R" for the Evans et al. dataset
           - Will also require the "Evans_AdditionalDividingCells.tsv" and "Evans_TAMCells.tsv" files
       - "2024_Chadarevian_NEP_Cuprizone_Seurat_v5_Integrated.R" for the Cuprizone demyelination dataset from this paper
+
+Zenodo DOI: 10.5281/zenodo.15151234
